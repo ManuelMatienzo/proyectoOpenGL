@@ -28,3 +28,4 @@ C:\Users\HP\Documents\UAGRM\8vo Semestre\Programación Gráfica\secondTask\compu
 C:\Users\HP\Documents\UAGRM\8vo Semestre\Programación Gráfica\secondTask\computer\obj\Debug\net8.0\computer.pdb
 C:\Users\HP\Documents\UAGRM\8vo Semestre\Programación Gráfica\secondTask\computer\obj\Debug\net8.0\computer.genruntimeconfig.cache
 C:\Users\HP\Documents\UAGRM\8vo Semestre\Programación Gráfica\secondTask\computer\obj\Debug\net8.0\ref\computer.dll
+C:\Users\HP\Documents\UAGRM\8vo Semestre\Programación Gráfica\secondTask\computer\obj\Debug\net8.0\computer.sourcelink.json
