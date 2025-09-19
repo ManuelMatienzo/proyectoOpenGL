@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\HP\\Documents\\UAGRM\\8vo Semestre\\Programación Gráfica\\secondTask\\computer\\computer.csproj": {}
+    "C:\\Users\\HP\\Documents\\UAGRM\\8voSemestre\\Programación Gráfica\\secondTask\\computer\\computer.csproj": {}
   },
   "projects": {
-    "C:\\Users\\HP\\Documents\\UAGRM\\8vo Semestre\\Programación Gráfica\\secondTask\\computer\\computer.csproj": {
+    "C:\\Users\\HP\\Documents\\UAGRM\\8voSemestre\\Programación Gráfica\\secondTask\\computer\\computer.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\HP\\Documents\\UAGRM\\8vo Semestre\\Programación Gráfica\\secondTask\\computer\\computer.csproj",
+        "projectUniqueName": "C:\\Users\\HP\\Documents\\UAGRM\\8voSemestre\\Programación Gráfica\\secondTask\\computer\\computer.csproj",
         "projectName": "computer",
-        "projectPath": "C:\\Users\\HP\\Documents\\UAGRM\\8vo Semestre\\Programación Gráfica\\secondTask\\computer\\computer.csproj",
+        "projectPath": "C:\\Users\\HP\\Documents\\UAGRM\\8voSemestre\\Programación Gráfica\\secondTask\\computer\\computer.csproj",
         "packagesPath": "C:\\Users\\HP\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\HP\\Documents\\UAGRM\\8vo Semestre\\Programación Gráfica\\secondTask\\computer\\obj\\",
+        "outputPath": "C:\\Users\\HP\\Documents\\UAGRM\\8voSemestre\\Programación Gráfica\\secondTask\\computer\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\HP\\AppData\\Roaming\\NuGet\\NuGet.Config"
@@ -46,6 +46,10 @@
             "OpenTK": {
               "target": "Package",
               "version": "[4.9.4, )"
+            },
+            "System.Text.Json": {
+              "target": "Package",
+              "version": "[9.0.9, )"
             }
           },
           "imports": [
