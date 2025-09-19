@@ -4,13 +4,8 @@ using OpenTK.Windowing.Desktop;
 
 class Program
 {
-    static void Main(string[] args)
+    static void Main()
     {
-        if (args.Length > 0 && args[0] == "--test-serialization")
-        {
-            EjemploSerializacion.EjecutarEjemplo();
-            return;
-        }
         var gws = GameWindowSettings.Default;
         var nws = new NativeWindowSettings
         {

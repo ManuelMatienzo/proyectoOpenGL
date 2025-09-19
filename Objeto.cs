@@ -1,14 +1,10 @@
 using System;
 using System.Collections.Generic;
 using OpenTK.Mathematics;
-using System.Text.Json.Serialization;
 
 public class Objeto
 {
-    [JsonInclude]
-    public List<Cara> Caras { get; private set; }
-    
-    [JsonInclude]
+    public List<Cara> Caras { get; }
     public Vector3 CentroDeMasa { get; private set; }
 
     public Objeto()
