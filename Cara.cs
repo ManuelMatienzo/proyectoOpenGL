@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 using OpenTK.Mathematics;
 
 public class Cara
@@ -25,5 +26,6 @@ public class Cara
     public void AgregarVertice(Vector3 posicion)
         => Vertices.Add(new Punto(posicion, ColorCara));
 
+    [JsonIgnore]
     public int VertexCount => Vertices.Count;
 }

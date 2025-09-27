@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using OpenTK.Mathematics;
 
 public class Punto
@@ -6,6 +7,7 @@ public class Punto
 
     public Vector3 Color { get; set; }
 
+    [JsonIgnore]
     public Vector3 CentroDeMasa => Posicion;
 
     public Punto(float x, float y, float z, Vector3 color)

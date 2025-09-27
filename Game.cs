@@ -4,295 +4,315 @@ using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.Desktop;
+using OpenTK.Windowing.GraphicsLibraryFramework;
 
 public sealed class Game : GameWindow
 {
     int _vao, _vbo, _ebo, _program;
     int _indexCount;
+    int _vertexCount;
+    long _frameCount;
 
-    const string VertexSrc = @"#version 330 core
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aColor;
-out vec3 vColor;
-void main(){ vColor=aColor; gl_Position=vec4(aPos,1.0); }";
+    private readonly Escenario _escenario;
+    private int _objSeleccionado = 0;
+    private bool _modoParte = false;
+    private int _parteSeleccionada = 0;
+    private bool _dirty = true;
+    private double _time;
 
-    const string FragmentSrc = @"#version 330 core
-in vec3 vColor; out vec4 FragColor;
-void main(){ FragColor=vec4(vColor,1.0); }";
+    private Matrix4 _view;
+    private Matrix4 _projection;
+    private int _uMvpLocation;
 
-    // Paleta line-art
-    static readonly Vector3 Stroke = new(0f, 0f, 0f);
-    static readonly Vector3 Fill   = new(0.98f, 0.98f, 0.98f);
+    const string VertexSrc = "#version 330\nlayout (location = 0) in vec3 aPos;\nlayout (location = 1) in vec3 aColor;\nuniform mat4 uMVP;\nout vec3 vColor;\nvoid main(){ vColor = aColor; gl_Position = uMVP * vec4(aPos,1.0); }";
 
-    public Game(GameWindowSettings gws, NativeWindowSettings nws) : base(gws, nws) { }
+    const string FragmentSrc = "#version 330\nin vec3 vColor; out vec4 FragColor;\nvoid main(){ FragColor = vec4(vColor,1.0); }";
+
+    // (Paleta removida: no usada en la versión limpia)
+
+    // Constructor original (por compatibilidad) crea un escenario simple
+    public Game(GameWindowSettings gws, NativeWindowSettings nws)
+        : this(gws, nws, new Escenario()) { }
+
+    // Nuevo constructor recibiendo un escenario externo
+    public Game(GameWindowSettings gws, NativeWindowSettings nws, Escenario escenario) : base(gws, nws)
+    {
+        _escenario = escenario ?? throw new ArgumentNullException(nameof(escenario));
+        // Generar seed si el escenario está vacío (aunque exista un JSON vacío)
+        if (_escenario.Objetos.Count == 0)
+        {
+            Console.WriteLine("[Seed] Escenario vacío: generando seed (monitor/cpu/teclado)...");
+            GenerarSeedGenerica();
+            Console.WriteLine($"[Seed] Generado: objetos={_escenario.Objetos.Count}");
+            try { Serializador.Guardar(ArchivoEscenario, _escenario); } catch (Exception ex) { Console.WriteLine($"[Seed] Error guardando seed: {ex.Message}"); }
+        }
+        else
+        {
+            Console.WriteLine($"[Seed] Escenario cargado con {_escenario.Objetos.Count} objetos. No se regenera seed.");
+        }
+    }
 
     protected override void OnLoad()
     {
         base.OnLoad();
-        // Fondo blanco y sin depth-test para dibujar por orden (painter's algorithm).
-        GL.ClearColor(1f, 1f, 1f, 1f);
-        GL.Disable(EnableCap.DepthTest);
-
-        var escena = CrearEscenaLineArt(); // monitor, teclado, cpu (todo en un Objeto)
+        GL.ClearColor(0.30f, 0.32f, 0.35f, 1f);
+        GL.Enable(EnableCap.DepthTest);
         _program = CompilarYLinkear(VertexSrc, FragmentSrc);
-        CrearBuffersDesdeObjeto(escena, out _vao, out _vbo, out _ebo, out _indexCount);
+        _uMvpLocation = GL.GetUniformLocation(_program, "uMVP");
+        _view = Matrix4.LookAt(new Vector3(2.2f, 1.2f, 3.0f), Vector3.Zero, Vector3.UnitY);
+        ActualizarProyeccion();
+        ReconstruirBuffers();
+        ImprimirInstrucciones();
+    }
+    // Depuración avanzada eliminada para versión de producción
+
+    private void ImprimirInstrucciones()
+    {
+        Console.WriteLine("=== Controles ===");
+        Console.WriteLine("ARCHIVO  : Ctrl+S Guardar  Ctrl+L Cargar  Ctrl+N Nuevo  ESC Salir");
+        Console.WriteLine("ESCENARIO: R RotarY  T MoverX-  Y MoverX+  O Escalar+  P Escalar-");
+        Console.WriteLine("OBJETO   : F1/F2 Obj prev/next  H Izq  L Der  J Abajo  K Arriba  G RotarZ  U Esc+  I Esc-");
+        Console.WriteLine("PARTE    : Tab Modo Obj/Parte  PageUp/PageDown Cambiar parte (en modo parte)");
+        Console.WriteLine();
     }
 
-    protected override void OnResize(ResizeEventArgs e)
+    protected override void OnUpdateFrame(FrameEventArgs args)
     {
-        base.OnResize(e);
-        GL.Viewport(0, 0, ClientSize.X, ClientSize.Y);
+        base.OnUpdateFrame(args);
+        _time += args.Time;
+        var kb = KeyboardState;
+        if (kb.IsKeyDown(Keys.Escape)) Close();
+
+        if (kb.IsKeyPressed(Keys.F4)) { /* (opcional) puntos, actualmente ignorado */ }
+
+        bool transformacionCPU = false;
+
+        // Cámara fija
+        _view = Matrix4.LookAt(new Vector3(2.2f, 1.2f, 3.0f), Vector3.Zero, Vector3.UnitY);
+
+        // Shortcuts CRUD (con Control)
+        if (kb.IsKeyDown(Keys.LeftControl) || kb.IsKeyDown(Keys.RightControl))
+        {
+            if (kb.IsKeyPressed(Keys.N)) NuevoEscenario();
+            if (kb.IsKeyPressed(Keys.S)) GuardarEscenario();
+            if (kb.IsKeyPressed(Keys.L)) CargarEscenario();
+            // Creación deshabilitada en runtime (Ctrl+O / Ctrl+P / Ctrl+C)
+        }
+
+        // Selección objeto
+        if (kb.IsKeyPressed(Keys.F1)) { _objSeleccionado = (_objSeleccionado - 1 + _escenario.Objetos.Count) % _escenario.Objetos.Count; Console.WriteLine($"Objeto seleccionado: {_objSeleccionado}"); _dirty = true; AjustarParteSiFueraDeRango(); }
+        if (kb.IsKeyPressed(Keys.F2)) { _objSeleccionado = (_objSeleccionado + 1) % _escenario.Objetos.Count; Console.WriteLine($"Objeto seleccionado: {_objSeleccionado}"); _dirty = true; AjustarParteSiFueraDeRango(); }
+
+        // Toggle modo parte
+        if (kb.IsKeyPressed(Keys.Tab))
+        {
+            _modoParte = !_modoParte;
+            if (_modoParte)
+            {
+                if (_escenario.Objetos.Count == 0 || _escenario.Objetos[_objSeleccionado].Partes.Count == 0)
+                {
+                    Console.WriteLine("[ModoParte] Sin partes en el objeto actual; permaneciendo en modo Objeto");
+                    _modoParte = false;
+                }
+                else
+                {
+                    _parteSeleccionada = Math.Clamp(_parteSeleccionada, 0, _escenario.Objetos[_objSeleccionado].Partes.Count - 1);
+                    Console.WriteLine($"[ModoParte] ACTIVADO. Parte {_parteSeleccionada} / {_escenario.Objetos[_objSeleccionado].Partes.Count} ({_escenario.Objetos[_objSeleccionado].Partes[_parteSeleccionada].Nombre})");
+                }
+            }
+            else
+            {
+                Console.WriteLine("[ModoParte] Desactivado (modo Objeto)");
+            }
+            _dirty = true;
+        }
+
+        // Navegación de partes
+        if (_modoParte && _escenario.Objetos.Count > 0)
+        {
+            var partes = _escenario.Objetos[_objSeleccionado].Partes;
+            if (partes.Count > 0)
+            {
+                if (kb.IsKeyPressed(Keys.PageUp)) { _parteSeleccionada = (_parteSeleccionada - 1 + partes.Count) % partes.Count; Console.WriteLine($"[Parte] Seleccionada {_parteSeleccionada} ({partes[_parteSeleccionada].Nombre})"); _dirty = true; }
+                if (kb.IsKeyPressed(Keys.PageDown)) { _parteSeleccionada = (_parteSeleccionada + 1) % partes.Count; Console.WriteLine($"[Parte] Seleccionada {_parteSeleccionada} ({partes[_parteSeleccionada].Nombre})"); _dirty = true; }
+            }
+        }
+
+        // Transformaciones CPU (objeto o parte)
+        if (_escenario.Objetos.Count > 0)
+        {
+            var obj = _escenario.Objetos[_objSeleccionado];
+            Parte? parteActual = null;
+            if (_modoParte && obj.Partes.Count > 0)
+            {
+                _parteSeleccionada = Math.Clamp(_parteSeleccionada, 0, obj.Partes.Count - 1);
+                parteActual = obj.Partes[_parteSeleccionada];
+            }
+            Vector3 delta = Vector3.Zero;
+            float mov = 0.25f * (float)args.Time;
+            if (kb.IsKeyDown(Keys.H)) delta.X -= mov;
+            if (kb.IsKeyDown(Keys.L)) delta.X += mov;
+            if (kb.IsKeyDown(Keys.J)) delta.Y -= mov;
+            if (kb.IsKeyDown(Keys.K)) delta.Y += mov;
+            if (delta != Vector3.Zero)
+            {
+                if (parteActual != null) parteActual.Trasladar(delta); else obj.Trasladar(delta);
+                transformacionCPU = true;
+            }
+            if (kb.IsKeyDown(Keys.G))
+            {
+                if (parteActual != null) parteActual.Rotar(Vector3.UnitZ, 1.0f * (float)args.Time); else obj.Rotar(Vector3.UnitZ, 1.0f * (float)args.Time);
+                transformacionCPU = true;
+            }
+            if (kb.IsKeyDown(Keys.U))
+            {
+                var esc = new Vector3(1f + 0.5f * (float)args.Time);
+                if (parteActual != null) parteActual.Escalar(esc); else obj.Escalar(esc);
+                transformacionCPU = true;
+            }
+            if (kb.IsKeyDown(Keys.I))
+            {
+                var esc = new Vector3(1f - 0.5f * (float)args.Time);
+                if (parteActual != null) parteActual.Escalar(esc); else obj.Escalar(esc);
+                transformacionCPU = true;
+            }
+        }
+
+        // Transformaciones CPU globales
+        if (kb.IsKeyDown(Keys.R)) { _escenario.Rotar(Vector3.UnitY, 0.5f * (float)args.Time); transformacionCPU = true; }
+        Vector3 deltaEsc = Vector3.Zero;
+        float escMov = 0.25f * (float)args.Time;
+        if (kb.IsKeyDown(Keys.T)) deltaEsc.X -= escMov;
+        if (kb.IsKeyDown(Keys.Y)) deltaEsc.X += escMov;
+        if (deltaEsc != Vector3.Zero) { _escenario.Trasladar(deltaEsc); transformacionCPU = true; }
+        if (kb.IsKeyDown(Keys.O)) { _escenario.Escalar(new Vector3(1f + 0.5f * (float)args.Time)); transformacionCPU = true; }
+        if (kb.IsKeyDown(Keys.P)) { _escenario.Escalar(new Vector3(1f - 0.5f * (float)args.Time)); transformacionCPU = true; }
+
+        if (transformacionCPU) { _dirty = true; if (_time > 0.25) { ReconstruirSiDirty(); _time = 0.0; } }
+        else { ReconstruirSiDirty(); }
+    }
+
+    private void ActualizarProyeccion()
+    {
+        float aspect = ClientSize.X / (float)Math.Max(1, ClientSize.Y);
+        _projection = Matrix4.CreatePerspectiveFieldOfView(MathHelper.DegreesToRadians(60f), aspect, 0.1f, 100f);
     }
 
     protected override void OnRenderFrame(FrameEventArgs args)
     {
         base.OnRenderFrame(args);
-        GL.Clear(ClearBufferMask.ColorBufferBit);
+        GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+        _frameCount++;
         GL.UseProgram(_program);
+    // Probar orden view * projection (modelo identidad). Si aún no se ve nada, revertiremos a model*view*projection.
+    Matrix4 mvp = _view * _projection;
+        GL.UniformMatrix4(_uMvpLocation, false, ref mvp);
+
         GL.BindVertexArray(_vao);
-        GL.DrawElements(PrimitiveType.Triangles, _indexCount, DrawElementsType.UnsignedInt, 0);
+    GL.DrawElements(PrimitiveType.Triangles, _indexCount, DrawElementsType.UnsignedInt, 0);
+
+        var err = GL.GetError();
+        if (err != OpenTK.Graphics.OpenGL4.ErrorCode.NoError)
+            Console.WriteLine($"[GL ERROR] {err}");
+
         GL.BindVertexArray(0);
         GL.UseProgram(0);
         Context.SwapBuffers();
     }
 
+    private void ReconstruirBuffers()
+    {
+    LiberarBuffersEscena();
+        HashSet<Cara>? highlight = null;
+        if (_modoParte && _escenario.Objetos.Count > 0)
+        {
+            var obj = _escenario.Objetos[_objSeleccionado];
+            if (obj.Partes.Count > 0)
+            {
+                _parteSeleccionada = Math.Clamp(_parteSeleccionada, 0, obj.Partes.Count - 1);
+                highlight = new HashSet<Cara>(obj.Partes[_parteSeleccionada].Caras);
+            }
+        }
+        CrearBuffersDesdeEscenario(_escenario, out _vao, out _vbo, out _ebo, out _indexCount, out _vertexCount, highlight);
+    }
+
+    private void ReconstruirSiDirty()
+    {
+        if (_dirty)
+        {
+            ReconstruirBuffers();
+            _dirty = false;
+        }
+    }
+
+    private void LiberarBuffersEscena()
+    {
+        if (_ebo != 0) { GL.DeleteBuffer(_ebo); _ebo = 0; }
+        if (_vbo != 0) { GL.DeleteBuffer(_vbo); _vbo = 0; }
+        if (_vao != 0) { GL.DeleteVertexArray(_vao); _vao = 0; }
+    }
+
+    private void LiberarBuffers()
+    {
+        LiberarBuffersEscena();
+    }
+
     protected override void OnUnload()
     {
         base.OnUnload();
-        if (_ebo != 0) GL.DeleteBuffer(_ebo);
-        if (_vbo != 0) GL.DeleteBuffer(_vbo);
-        if (_vao != 0) GL.DeleteVertexArray(_vao);
+        LiberarBuffers();
         if (_program != 0) GL.DeleteProgram(_program);
     }
 
-    // ===================== ESCENA LINE-ART =====================
-    private static Objeto CrearEscenaLineArt()
-    {
-        var obj = new Objeto();
-
-        // --- MONITOR ---
-        {
-            // Marco exterior
-            AgregarRectConBorde(obj, centro: new(0f, 0.12f, 0f), w: 1.10f, h: 0.70f, grosor: 0.03f);
-
-            // Pantalla interior (marco fino)
-            AgregarRectConBorde(obj, centro: new(0f, 0.12f, 0.002f), w: 0.92f, h: 0.54f, grosor: 0.015f);
-
-            // Cuello y base
-            AgregarRectConBorde(obj, centro: new(0f, -0.25f, 0.001f), w: 0.12f, h: 0.12f, grosor: 0.015f);
-            AgregarRectConBorde(obj, centro: new(0f, -0.34f, 0.001f), w: 0.42f, h: 0.12f, grosor: 0.02f);
-        }
-
-        // --- CPU (a la derecha) ---
-        {
-            AgregarRectConBorde(obj, centro: new(0.68f, 0.00f, 0f), w: 0.42f, h: 0.74f, grosor: 0.02f);
-            // Ranura
-            AgregarRectConBorde(obj, centro: new(0.68f, 0.26f, 0.002f), w: 0.28f, h: 0.07f, grosor: 0.015f);
-            // Botones (dos círculos con aro)
-            AgregarCirculoConBorde(obj, centro: new(0.78f, -0.08f, 0.0025f), radio: 0.03f, grosor: 0.012f);
-            AgregarCirculoConBorde(obj, centro: new(0.78f, -0.18f, 0.0025f), radio: 0.025f, grosor: 0.010f);
-        }
-
-        // --- TECLADO (trapezoidal) ---
-        {
-            // Trapezoide base (ligera perspectiva)
-            var topLeft  =  new Vector3(-0.60f, -0.72f, 0f);
-            var topRight =  new Vector3(+0.60f, -0.72f, 0f);
-            var botRight =  new Vector3(+0.72f, -0.90f, 0f);
-            var botLeft  =  new Vector3(-0.72f, -0.90f, 0f);
-
-            AgregarTrapezoideConBorde(obj, topLeft, topRight, botRight, botLeft, grosor: 0.02f);
-
-            // Rejilla de teclas (líneas dentro del trapezoide)
-            // 12 columnas y 4 filas, centradas
-            AgregarGridEnTrapezoide(obj, topLeft, topRight, botRight, botLeft, cols: 12, rows: 4, grosor: 0.012f);
-
-            // Barra espaciadora (recto dentro del trapezoide, centrado horizontal)
-            var sY = 0.82f; // fracción de altura desde arriba (entre 0..1)
-            var leftEdge  = Lerp(topLeft,  botLeft,  sY);
-            var rightEdge = Lerp(topRight, botRight, sY);
-            var center    = (leftEdge + rightEdge) * 0.5f;
-            AgregarLinea(obj, center + (rightEdge - leftEdge) * (-0.20f), center + (rightEdge - leftEdge) * (0.20f), grosor: 0.02f);
-        }
-
-        obj.RecalcularCentroDeMasa(); // (no afecta al dibujo)
-        return obj;
-    }
-
-    // ===================== HELPERS DE DIBUJO (line-art) =====================
-
-    // Rectángulo relleno + borde negro
-    private static void AgregarRectConBorde(Objeto obj, Vector3 centro, float w, float h, float grosor)
-    {
-        float hw = w * 0.5f, hh = h * 0.5f;
-
-        // Relleno
-        AgregarQuad(obj,
-            new(centro.X - hw, centro.Y - hh, centro.Z),
-            new(centro.X + hw, centro.Y - hh, centro.Z),
-            new(centro.X + hw, centro.Y + hh, centro.Z),
-            new(centro.X - hw, centro.Y + hh, centro.Z),
-            Fill);
-
-        // Bordes como 4 tiras
-        float t = grosor;
-        // Arriba
-        AgregarQuad(obj,
-            new(centro.X - hw, centro.Y + hh, centro.Z + 0.0005f),
-            new(centro.X + hw, centro.Y + hh, centro.Z + 0.0005f),
-            new(centro.X + hw, centro.Y + hh - t, centro.Z + 0.0005f),
-            new(centro.X - hw, centro.Y + hh - t, centro.Z + 0.0005f),
-            Stroke);
-        // Abajo
-        AgregarQuad(obj,
-            new(centro.X - hw, centro.Y - hh + t, centro.Z + 0.0005f),
-            new(centro.X + hw, centro.Y - hh + t, centro.Z + 0.0005f),
-            new(centro.X + hw, centro.Y - hh, centro.Z + 0.0005f),
-            new(centro.X - hw, centro.Y - hh, centro.Z + 0.0005f),
-            Stroke);
-        // Izquierda
-        AgregarQuad(obj,
-            new(centro.X - hw, centro.Y - hh, centro.Z + 0.0005f),
-            new(centro.X - hw + t, centro.Y - hh, centro.Z + 0.0005f),
-            new(centro.X - hw + t, centro.Y + hh, centro.Z + 0.0005f),
-            new(centro.X - hw, centro.Y + hh, centro.Z + 0.0005f),
-            Stroke);
-        // Derecha
-        AgregarQuad(obj,
-            new(centro.X + hw - t, centro.Y - hh, centro.Z + 0.0005f),
-            new(centro.X + hw, centro.Y - hh, centro.Z + 0.0005f),
-            new(centro.X + hw, centro.Y + hh, centro.Z + 0.0005f),
-            new(centro.X + hw - t, centro.Y + hh, centro.Z + 0.0005f),
-            Stroke);
-    }
-
-    // Trapezoide relleno + borde negro
-    private static void AgregarTrapezoideConBorde(Objeto obj, Vector3 tl, Vector3 tr, Vector3 br, Vector3 bl, float grosor)
-    {
-        // Relleno (dos triángulos)
-        AgregarQuad(obj, tl, tr, br, bl, Fill);
-
-        // Bordes (4 líneas como quads finitos)
-        AgregarLinea(obj, tl, tr, grosor);
-        AgregarLinea(obj, tr, br, grosor);
-        AgregarLinea(obj, br, bl, grosor);
-        AgregarLinea(obj, bl, tl, grosor);
-    }
-
-    // Línea gruesa como un quad orientado entre A y B
-    private static void AgregarLinea(Objeto obj, Vector3 a, Vector3 b, float grosor)
-    {
-        var dir = (b - a);
-        float len = dir.Length;
-        if (len <= 1e-6f) return;
-        dir /= len;
-
-        // Perpendicular 2D (x,y) y grosor/2
-        var perp = new Vector3(-dir.Y, dir.X, 0f) * (grosor * 0.5f);
-
-        var p1 = a - perp;
-        var p2 = a + perp;
-        var p3 = b + perp;
-        var p4 = b - perp;
-
-        AgregarQuad(obj, p1, p2, p3, p4, Stroke);
-    }
-
-    // Grid (vertical y horizontal) dentro de un trapezoide
-    private static void AgregarGridEnTrapezoide(Objeto obj, Vector3 tl, Vector3 tr, Vector3 br, Vector3 bl, int cols, int rows, float grosor)
-    {
-        // Verticales
-        for (int c = 1; c < cols; c++)
-        {
-            float t = c / (float)cols;
-            var top    = Lerp(tl, tr, t);
-            var bottom = Lerp(bl, br, t);
-            AgregarLinea(obj, top, bottom, grosor);
-        }
-        // Horizontales
-        for (int r = 1; r < rows; r++)
-        {
-            float s = r / (float)rows;
-            var left  = Lerp(tl, bl, s);
-            var right = Lerp(tr, br, s);
-            AgregarLinea(obj, left, right, grosor);
-        }
-    }
-
-    // Círculo con borde: dibuja disco blanco y aro negro (dos discos concéntricos)
-    private static void AgregarCirculoConBorde(Objeto obj, Vector3 centro, float radio, float grosor)
-    {
-        int seg = 48;
-        // Disco exterior negro (borde)
-        AgregarDisco(obj, centro, radio, Stroke, seg);
-        // Disco interior blanco (relleno)
-        AgregarDisco(obj, centro, radio - grosor, Fill, seg);
-    }
-
-    private static void AgregarDisco(Objeto obj, Vector3 centro, float radio, Vector3 color, int seg)
-    {
-        var cara = obj.AgregarCara(color);
-        // Centro
-        cara.AgregarVertice(centro);
-        // Borde
-        for (int i = 0; i <= seg; i++)
-        {
-            float a = (float)(i * Math.PI * 2.0 / seg);
-            float x = centro.X + radio * MathF.Cos(a);
-            float y = centro.Y + radio * MathF.Sin(a);
-            cara.AgregarVertice(new Vector3(x, y, centro.Z));
-        }
-    }
-
-    // Quad genérico (en la misma Z)
-    private static void AgregarQuad(Objeto obj, Vector3 a, Vector3 b, Vector3 c, Vector3 d, Vector3 color)
-    {
-        var cara = obj.AgregarCara(color);
-        cara.AgregarVertice(a); cara.AgregarVertice(b); cara.AgregarVertice(c); cara.AgregarVertice(d);
-    }
-
-    private static Vector3 Lerp(Vector3 a, Vector3 b, float t) => a + (b - a) * t;
-
-    // ===================== BUFFERS =====================
-    private static void CrearBuffersDesdeObjeto(Objeto objeto, out int vao, out int vbo, out int ebo, out int indexCount)
+    private static void CrearBuffersDesdeEscenario(Escenario escenario, out int vao, out int vbo, out int ebo, out int indexCount, out int vertexCount, HashSet<Cara>? highlightCaras = null)
     {
         var vertices = new List<float>();
         var indices  = new List<int>();
         int baseVertex = 0;
-
-        foreach (var cara in objeto.Caras)
+        foreach (var cara in escenario.Caras)
         {
-            foreach (var p in cara.Vertices)
-                vertices.AddRange(p.ToVertexData());
-
-            for (int i = 1; i <= cara.Vertices.Count - 2; i++)
+            int added = cara.Vertices.Count;
+            for (int i = 0; i < added; i++)
             {
-                indices.Add(baseVertex + 0);
-                indices.Add(baseVertex + i);
-                indices.Add(baseVertex + i + 1);
+                var p = cara.Vertices[i];
+                Vector3 color = p.Color;
+                if (highlightCaras != null && highlightCaras.Contains(cara))
+                {
+                    color = Vector3.Clamp(color * 0.3f + new Vector3(1f,1f,0f) * 0.7f, Vector3.Zero, Vector3.One);
+                }
+                vertices.Add(p.Posicion.X);
+                vertices.Add(p.Posicion.Y);
+                vertices.Add(p.Posicion.Z);
+                vertices.Add(color.X);
+                vertices.Add(color.Y);
+                vertices.Add(color.Z);
             }
-            baseVertex += cara.Vertices.Count;
+            if (added >= 3)
+            {
+                for (int t = 1; t <= added - 2; t++)
+                {
+                    indices.Add(baseVertex + 0);
+                    indices.Add(baseVertex + t);
+                    indices.Add(baseVertex + t + 1);
+                }
+            }
+            baseVertex += added;
         }
-
         vao = GL.GenVertexArray();
         vbo = GL.GenBuffer();
         ebo = GL.GenBuffer();
-
         GL.BindVertexArray(vao);
-
         GL.BindBuffer(BufferTarget.ArrayBuffer, vbo);
-        GL.BufferData(BufferTarget.ArrayBuffer, vertices.Count * sizeof(float), vertices.ToArray(), BufferUsageHint.StaticDraw);
-
+        GL.BufferData(BufferTarget.ArrayBuffer, vertices.Count * sizeof(float), vertices.ToArray(), BufferUsageHint.DynamicDraw);
         GL.BindBuffer(BufferTarget.ElementArrayBuffer, ebo);
-        GL.BufferData(BufferTarget.ElementArrayBuffer, indices.Count * sizeof(int), indices.ToArray(), BufferUsageHint.StaticDraw);
-
-        GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, Punto.StrideBytes, 0);
+        GL.BufferData(BufferTarget.ElementArrayBuffer, indices.Count * sizeof(int), indices.ToArray(), BufferUsageHint.DynamicDraw);
+        GL.VertexAttribPointer(0,3,VertexAttribPointerType.Float,false,Punto.StrideBytes,0);
         GL.EnableVertexAttribArray(0);
-        GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, Punto.StrideBytes, 3 * sizeof(float));
+        GL.VertexAttribPointer(1,3,VertexAttribPointerType.Float,false,Punto.StrideBytes,3*sizeof(float));
         GL.EnableVertexAttribArray(1);
-
         GL.BindVertexArray(0);
         indexCount = indices.Count;
+        vertexCount = baseVertex;
     }
 
     // ===================== SHADERS =====================
@@ -317,4 +337,95 @@ void main(){ FragColor=vec4(vColor,1.0); }";
         GL.DeleteShader(vs); GL.DeleteShader(fs);
         return prog;
     }
+
+    private void AjustarParteSiFueraDeRango()
+    {
+        if (_escenario.Objetos.Count == 0) return;
+        var partes = _escenario.Objetos[_objSeleccionado].Partes;
+        if (partes.Count == 0)
+        {
+            _parteSeleccionada = 0;
+            if (_modoParte)
+            {
+                _modoParte = false;
+                Console.WriteLine("[ModoParte] Desactivado: el objeto no tiene partes");
+            }
+        }
+        else
+        {
+            _parteSeleccionada = Math.Clamp(_parteSeleccionada, 0, partes.Count - 1);
+        }
+    }
+
+    // ================= CRUD ESCENARIO =================
+    const string ArchivoEscenario = "escenario.json";
+    private void GenerarSeedGenerica()
+    {
+        // Seed mínima SOLO primera ejecución: monitor, cpu, teclado.
+        Console.WriteLine("[Seed] Creando objetos seed...");
+        // Monitor
+        var monitor = new Objeto(); _escenario.AgregarObjeto(monitor);
+        var parteMonitor = new Parte("monitor"); monitor.AgregarParte(parteMonitor);
+        // Marco externo
+        CrearRect(parteMonitor, new Vector3(-0.6f, 0.4f, 0f), 0.8f, 0.5f, new Vector3(0.1f,0.1f,0.1f));
+        // Pantalla interna
+        CrearRect(parteMonitor, new Vector3(-0.6f, 0.4f, 0.01f), 0.7f, 0.4f, new Vector3(0.05f,0.15f,0.4f));
+        // Base
+        CrearRect(parteMonitor, new Vector3(-0.6f, 0.07f, 0f), 0.25f, 0.06f, new Vector3(0.12f,0.12f,0.12f));
+
+        // CPU (torre)
+        var cpu = new Objeto(); _escenario.AgregarObjeto(cpu);
+        var parteCpu = new Parte("cpu"); cpu.AgregarParte(parteCpu);
+        CrearRect(parteCpu, new Vector3(0.2f, 0.25f, 0f), 0.25f, 0.55f, new Vector3(0.2f,0.2f,0.22f));
+        // Franja frontal
+        CrearRect(parteCpu, new Vector3(0.2f, 0.45f, 0.01f), 0.22f, 0.08f, new Vector3(0.25f,0.25f,0.28f));
+        // Botón
+        CrearRect(parteCpu, new Vector3(0.28f, 0.37f, 0.02f), 0.03f, 0.03f, new Vector3(0.8f,0.1f,0.1f));
+
+        // Teclado (plano)
+        var teclado = new Objeto(); _escenario.AgregarObjeto(teclado);
+        var parteTeclado = new Parte("teclado"); teclado.AgregarParte(parteTeclado);
+        CrearRect(parteTeclado, new Vector3(-0.15f, -0.15f, 0f), 0.55f, 0.18f, new Vector3(0.18f,0.18f,0.18f));
+        CrearRect(parteTeclado, new Vector3(-0.15f, -0.15f, 0.01f), 0.5f, 0.14f, new Vector3(0.3f,0.3f,0.3f));
+
+        _escenario.RecalcularCentroDeMasa(); 
+        Console.WriteLine($"[Seed] Centros recalculados. Total objetos: {_escenario.Objetos.Count}");
+    }
+
+    private static void CrearRect(Parte parte, Vector3 centro, float ancho, float alto, Vector3 color)
+    {
+        var cara = parte.AgregarCara(color);
+        float hw = ancho * 0.5f; float hh = alto * 0.5f;
+        cara.AgregarVertice(centro + new Vector3(-hw,-hh,centro.Z));
+        cara.AgregarVertice(centro + new Vector3( hw,-hh,centro.Z));
+        cara.AgregarVertice(centro + new Vector3( hw, hh,centro.Z));
+        cara.AgregarVertice(centro + new Vector3(-hw, hh,centro.Z));
+    }
+    private void NuevoEscenario()
+    {
+        _escenario.Objetos.Clear();
+        _objSeleccionado = 0; _parteSeleccionada = 0; _modoParte = false;
+        _dirty = true; ReconstruirSiDirty();
+        Console.WriteLine("[CRUD] Escenario vaciado");
+    }
+
+    private void GuardarEscenario()
+    {
+        try { Serializador.Guardar(ArchivoEscenario, _escenario); }
+        catch (Exception ex) { Console.WriteLine($"[CRUD] Error guardando: {ex.Message}"); }
+    }
+
+    private void CargarEscenario()
+    {
+        var esc = Deserializador.Cargar(ArchivoEscenario);
+        if (esc != null)
+        {
+            _escenario.Objetos.Clear();
+            foreach (var o in esc.Objetos) _escenario.AgregarObjeto(o);
+            _objSeleccionado = 0; _parteSeleccionada = 0; _modoParte = false;
+            _dirty = true; ReconstruirSiDirty();
+        }
+    }
+
+    // Métodos de creación interactiva eliminados para impedir modificaciones en ejecución
 }

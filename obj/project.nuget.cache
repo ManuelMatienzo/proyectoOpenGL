@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "kPzREdiqEuE=",
+  "dgSpecHash": "GDj07V5ww2g=",
   "success": true,
-  "projectFilePath": "C:\\Users\\HP\\Documents\\UAGRM\\8vo Semestre\\Programación Gráfica\\secondTask\\computer\\computer.csproj",
+  "projectFilePath": "C:\\Users\\HP\\Documents\\UAGRM\\8voSemestre\\Programación Gráfica\\secondTask\\computer\\computer.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\HP\\.nuget\\packages\\opentk\\4.9.4\\opentk.4.9.4.nupkg.sha512",
     "C:\\Users\\HP\\.nuget\\packages\\opentk.audio.openal\\4.9.4\\opentk.audio.openal.4.9.4.nupkg.sha512",
